@@ -11,12 +11,17 @@ with the ownmect_s2 MECT-B2 speaker encoder; `prompt_text` is not used. This is 
 `zonos3-rate30-20k-r2grpo_embedding` protocol: release sampling defaults (left to the server), seed 0 and a
 1350-frame cap on every request, server text normalization for en zh fr de es it pt ja ko, and every other
 language sent as en_us with normalization off.
+
+Text frontend (inside the timed request): in languages without server normalization, numbers are spelled out with
+num2words (none for el, hi), as the server would otherwise hand the digits to the model as typed. The manifest keeps the
+dataset text.
 """
 
 import argparse
 import base64
 import json
 import os
+import re
 import time
 import urllib.error
 import urllib.request
@@ -24,6 +29,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 import soundfile as sf
+from num2words import num2words
 from tqdm import tqdm
 
 from run_eval_utils import (
@@ -46,6 +52,53 @@ from run_eval_utils import (
 SERVER_LANGUAGE = {"en": "en_us", "zh": "cmn", "fr": "fr_fr", "de": "de", "es": "es", "it": "it",
                    "pt": "pt_br", "ja": "ja", "ko": "ko"}
 EMPTY_AUDIO_SECONDS = 0.1  # an empty response is written as this much silence, so it scores as a full miss
+
+# Languages without server normalization whose numbers num2words reads (the server would hand digits to the model as
+# typed): decimal separator, and the word for "%" (Turkish says it before the number).
+NUMBER_DECIMAL = {"ru": ",", "nl": ",", "pl": ",", "cs": ",", "ro": ",", "fi": ",", "tr": ",", "id": ",", "vi": ",",
+                  "ar": ".", "th": "."}
+NUMBER_PERCENT = {"ru": "процентов", "nl": "procent", "pl": "procent", "cs": "procent", "ro": "la sută", "fi": "prosenttia",
+                  "tr": "yüzde", "id": "persen", "vi": "phần trăm", "ar": "بالمئة", "th": "เปอร์เซ็นต์"}
+# num2words' decimal reading is wrong for these ("3,5" -> vi "ba phẩy năm mươi"): integer part, this word, fraction digits
+DECIMAL_WORD = {"tr": "virgül", "vi": "phẩy", "ar": "فاصلة", "th": "จุด"}
+# an optional "%" before (Turkish writing) or after the number: thousand groups split by spaces, or digits with "." /
+# "," inside (one separator: a decimal or thousands; more: a date or version, read part by part)
+NUMBER = re.compile(r"(%\s?)?(?<![\w.,])(\d{1,3}(?:[ \u00a0]\d{3})+(?!\d)|\d+(?:[.,]\d+)*)(\s?%)?")
+
+
+def number_words(match, lang):
+    """One number (thousand groups, decimal, optional %) in words; the match unchanged if num2words fails."""
+    raw, percent = match.group(2), match.group(1) or match.group(3)
+    dec = NUMBER_DECIMAL[lang]
+    try:
+        if re.fullmatch(r"\d+", raw) or any(c in raw for c in " \u00a0") or re.fullmatch(r"\d+[.,]\d{3}", raw) and dec not in raw:
+            words = num2words(int(re.sub(r"\D", "", raw)), lang=lang)  # an integer (the other separator groups thousands)
+        elif dec in raw and raw.count(dec) == 1 and not re.search(r"[.,]", raw.replace(dec, "", 1)):
+            whole, frac = raw.split(dec)
+            if lang in DECIMAL_WORD:
+                zeros = len(frac) - len(frac.lstrip("0"))
+                words = " ".join([num2words(int(whole), lang=lang), DECIMAL_WORD[lang]]
+                                 + [num2words(0, lang=lang)] * zeros + ([num2words(int(frac), lang=lang)] if frac.lstrip("0") else []))
+            else:
+                words = num2words(float(f"{whole}.{frac}"), lang=lang)
+        else:  # the other separator (not a thousands group), or several: a date, version or ordinal, part by part
+            words = " ".join(num2words(int(part), lang=lang) for part in re.split(r"[.,]", raw))
+    except (NotImplementedError, OverflowError, ValueError):
+        return match.group(0)
+    if percent:
+        words = f"{NUMBER_PERCENT[lang]} {words}" if lang == "tr" else f"{words} {NUMBER_PERCENT[lang]}"
+    return words
+
+
+def spell_numbers(text, lang):
+    """Digits -> words for a language without server normalization (unchanged where num2words has no reading)."""
+    if lang not in NUMBER_DECIMAL:
+        return text
+
+    def replace(m):
+        before, after = text[m.start() - 1 : m.start()], text[m.end() : m.end() + 1]
+        return (" " if before.isalnum() else "") + number_words(m, lang) + (" " if after.isalnum() else "")
+    return NUMBER.sub(replace, text)
 
 
 def http(url, payload=None, timeout=60):
@@ -140,9 +193,12 @@ def main(args):
             })
             prompt_rel_paths.append(prel)
 
+        def request(payload):
+            payload = dict(payload, text=spell_numbers(payload["text"], language))
+            return synthesize(args.server_url, payload, args.request_timeout, args.retries)
+
         start = time.perf_counter()
-        outputs = list(executor.map(
-            lambda p: synthesize(args.server_url, p, args.request_timeout, args.retries), payloads))
+        outputs = list(executor.map(request, payloads))
         per_sample_time = (time.perf_counter() - start) / len(payloads)
 
         entries = []

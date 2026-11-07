@@ -1,6 +1,6 @@
 #!/bin/bash
 # HF Jobs TTS eval — ZONOS3 Mini backend (generate → transcribe → SIM → UTMOS → score), speaker-embedding cloning.
-# Runs locally; submits HF Jobs. Usage: bash zonos3/submit_jobs.sh ["Zyphra/ZONOS3-Mini 16 hf://..." ...]
+# Runs locally; submits HF Jobs. Usage: bash zonos3/submit_jobs.sh ["Zyphra/ZONOS3-Mini <max_running> hf://..." ...]
 # The runtime (github.com/Zyphra/ZONOS3) and the weights (Zyphra/ZONOS3_Mini_release_ckpts) are private: stage 1 runs
 # on a public CUDA base image, clones the pinned runtime with ZONOS3_GITHUB_TOKEN (from ZONOS3_SECRETS_FILE) and
 # pulls the weights with HF_TOKEN. Shared orchestration (stages 2-4, injection, logging, scoring) lives in
@@ -10,10 +10,14 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/scripts/tts_jobs_common
 # ── Backend config ───────────────────────────────────────────────────────────
 ZONOS3_IMAGE="${ZONOS3_IMAGE:-nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04}"   # CUDA 12.8 toolkit: the runtime JIT-compiles kernels
 ZONOS3_REPO="https://github.com/Zyphra/ZONOS3.git"
-ZONOS3_REV="${ZONOS3_REV:-a884139eb5d1c2d800add9a6f14ee64f37e40d48}"   # main 2026-11-06: release LM rate30_20k_r2grpo, KEEP-2 decoder
+ZONOS3_REV="${ZONOS3_REV:-1c551947ebc996395d737276f3b4a0ba031eac09}"   # leaderboard-throughput (main a884139 + server throughput fixes): release LM rate30_20k_r2grpo, KEEP-2 decoder
 ZONOS3_SECRETS_FILE="${ZONOS3_SECRETS_FILE:-${HOME}/.config/zonos3-eval/secrets.env}"   # ZONOS3_GITHUB_TOKEN=<token>
 UV_VERSION="0.9.17"
 ZONOS3_PORT=1919   # serve.sh's port
+# Server throughput settings (23 vCPUs on h200): text tokenizer processes beside the scheduler, the detokenizer, the API
+# server and the client; prefill tokens per scheduler step, so a burst of requests is admitted in a few steps.
+ZONOS3_TOKENIZERS="${ZONOS3_TOKENIZERS:-16}"
+ZONOS3_PREFILL_TOKENS="${ZONOS3_PREFILL_TOKENS:-8192}"
 # gen FLAVOR (h200) is set centrally in tts_jobs_common.sh for RTFx comparability — don't override.
 RUN_EVAL_INJECT="$(inject_run_eval)"
 SUPPORTS_VOICE_CLONE=true
@@ -24,11 +28,14 @@ if [[ " ${STAGES:-generate} " == *" generate "* ]] && ! grep -q '^ZONOS3_GITHUB_
     exit 1
 fi
 
-# ── Stage 1: install the pinned runtime, start its server, generate via the HTTP client. MODEL_CFG = "model_id concurrency [lm]". ──
-# concurrency = the server's running-request cap and the client's batch; lm = --model-path (empty: the release LM).
+# ── Stage 1: install the pinned runtime, start its server, generate via the HTTP client. MODEL_CFG = "model_id max_running [lm]". ──
+# max_running = the scheduler's running-request cap (and CUDA-graph batch); the client keeps 2x that many requests in
+# flight per batch, so the scheduler's queue refills every slot as soon as a request finishes. lm = --model-path (empty:
+# the release LM).
 generate_stage() {
-    local _ BATCH_SIZE SERVE_MODEL
-    read -r _ BATCH_SIZE SERVE_MODEL <<< "${MODEL_CFG}"
+    local _ MAX_RUNNING SERVE_MODEL
+    read -r _ MAX_RUNNING SERVE_MODEL <<< "${MODEL_CFG}"
+    local CLIENT_BATCH=$((2 * MAX_RUNNING))
     hf jobs run \
         --flavor "${FLAVOR}" --timeout 8h --secrets HF_TOKEN --secrets-file "${ZONOS3_SECRETS_FILE}" ${NAMESPACE_ARG} \
         --volume "hf://buckets/${RESULTS_BUCKET}:/results" "${ZONOS3_IMAGE}" \
@@ -43,18 +50,19 @@ generate_stage() {
             git -C /opt/zonos3 checkout -q ${ZONOS3_REV}
             git -C /opt/zonos3 submodule update --init -q third_party/fusealign-multilingual
             cd /opt/zonos3 && uv sync --locked --package zonos3-sgl --group phonemize
-            SERVE_MODEL=${SERVE_MODEL} servers/sgl/scripts/serve.sh --max-running-requests ${BATCH_SIZE} --cuda-graph-max-bs ${BATCH_SIZE} > /tmp/zonos3_server.log 2>&1 &
+            SERVE_MODEL=${SERVE_MODEL} servers/sgl/scripts/serve.sh --max-running-requests ${MAX_RUNNING} --cuda-graph-max-bs ${MAX_RUNNING} \
+                --max-prefill-length ${ZONOS3_PREFILL_TOKENS} --num-tokenizer ${ZONOS3_TOKENIZERS} > /tmp/zonos3_server.log 2>&1 &
             SERVER_PID=\$!
             trap 'rc=\$?; kill \$SERVER_PID 2>/dev/null || true; if [ \$rc -ne 0 ]; then tail -n 200 /tmp/zonos3_server.log; fi; exit \$rc' EXIT
             uv venv -q --python 3.12 /opt/client
-            uv pip install -q --python /opt/client/bin/python 'datasets<4.0' 'huggingface_hub<1.0' soundfile librosa numpy tqdm
+            uv pip install -q --python /opt/client/bin/python 'datasets<4.0' 'huggingface_hub<1.0' soundfile librosa numpy tqdm num2words
             cd /app/zonos3 && /opt/client/bin/python run_eval.py \
                 --model_id=${MODEL_ID} \
                 --dataset_path=${DATASET_PATH} \
                 --dataset=${DATASET} \
                 --split=${SPLIT} \
                 --language=${ASR_LANG} \
-                --batch_size=${BATCH_SIZE} \
+                --batch_size=${CLIENT_BATCH} \
                 --max_eval_samples=${MAX_EVAL_SAMPLES} \
                 --server_url=http://127.0.0.1:${ZONOS3_PORT} \
                 --server_pid=\$SERVER_PID \
@@ -103,9 +111,9 @@ DATASET_CONFIGS=(
     "tts vi vi ${MINIMAX_EVAL_PATH}"
 )
 
-# ── Models: "model_id concurrency [lm]" (CLI args override) ───────────────────
+# ── Models: "model_id max_running [lm]" (CLI args override); 512 = the largest cap measured (H100: RTFx 70-94) ──
 MODEL_CONFIGS=(
-    "Zyphra/ZONOS3-Mini 16 hf://Zyphra/ZONOS3_Mini_release_ckpts/lm/rate30_20k_r2grpo"
+    "Zyphra/ZONOS3-Mini 512 hf://Zyphra/ZONOS3_Mini_release_ckpts/lm/rate30_20k_r2grpo"
 )
 [[ $# -gt 0 ]] && MODEL_CONFIGS=("$@")
 
