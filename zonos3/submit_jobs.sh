@@ -111,9 +111,10 @@ DATASET_CONFIGS=(
     "tts vi vi ${MINIMAX_EVAL_PATH}"
 )
 
-# ── Models: "model_id max_running [lm]" (CLI args override); 512 = the largest cap measured (H100: RTFx 70-94) ──
+# ── Models: "model_id max_running [lm]" (CLI args override). h200, 512 Seed-TTS + 500 CV3 en: cap 256 -> RTFx 40,
+# 512 -> 81, 1024 -> 83 (all requests in flight); 1024 lets the largest set (Seed-TTS zh, 2020) run as one batch. ──
 MODEL_CONFIGS=(
-    "Zyphra/ZONOS3-Mini 512 hf://Zyphra/ZONOS3_Mini_release_ckpts/lm/rate30_20k_r2grpo"
+    "Zyphra/ZONOS3-Mini 1024 hf://Zyphra/ZONOS3_Mini_release_ckpts/lm/rate30_20k_r2grpo"
 )
 [[ $# -gt 0 ]] && MODEL_CONFIGS=("$@")
 
