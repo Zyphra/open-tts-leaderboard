@@ -118,8 +118,9 @@ def process_alive(pid):
         return False
 
 
-def wait_for_server(base_url, timeout, server_pid):
-    """Poll GET /v2/health; fail fast if the server process dies (first start JIT-compiles kernels)."""
+def wait_for_server(base_url, timeout, server_pid, server_log=None):
+    """Poll GET /v2/health; fail fast if the server process dies or its log shows a traceback (a scheduler or tokenizer
+    subprocess that crashes leaves the API process up but never healthy). The first start JIT-compiles kernels."""
     deadline = time.monotonic() + timeout
     while True:
         try:
@@ -129,6 +130,10 @@ def wait_for_server(base_url, timeout, server_pid):
             pass
         if server_pid and not process_alive(server_pid):
             raise RuntimeError("ZONOS3 server exited before it became healthy (its log tail follows).")
+        if server_log and os.path.exists(server_log):
+            with open(server_log, errors="replace") as f:
+                if "Traceback (most recent call last)" in f.read():
+                    raise RuntimeError("ZONOS3 server raised during startup (its log tail follows).")
         if time.monotonic() > deadline:
             raise RuntimeError(f"ZONOS3 server not healthy after {timeout}s.")
         time.sleep(10)
@@ -159,7 +164,7 @@ def main(args):
     server_language = SERVER_LANGUAGE.get(language, "en_us")
     text_normalization = language in SERVER_LANGUAGE
 
-    wait_for_server(args.server_url, args.server_timeout, args.server_pid)
+    wait_for_server(args.server_url, args.server_timeout, args.server_pid, args.server_log)
     caps = json.loads(http(f"{args.server_url}/v2/capabilities")[0])
     if "embedding" not in caps["speaker_modes"]:
         raise SystemExit(f"The served checkpoint has no embedding speaker mode: {caps['speaker_modes']}")
@@ -233,6 +238,7 @@ if __name__ == "__main__":
     parser.add_argument("--language", default=None, help="Language code of the split (default: --split).")
     parser.add_argument("--server_url", default="http://127.0.0.1:1919", help="ZONOS3 server (serve.sh's port).")
     parser.add_argument("--server_pid", type=int, default=0, help="Server PID; the startup wait fails fast if it exits.")
+    parser.add_argument("--server_log", default=None, help="Server log; the startup wait fails fast on a traceback in it.")
     parser.add_argument("--server_timeout", type=int, default=3600, help="Seconds to wait for /v2/health.")
     parser.add_argument("--request_timeout", type=int, default=900, help="Seconds per /v2/generate request.")
     parser.add_argument("--retries", type=int, default=4, help="Retries per request on 5xx / connection errors.")

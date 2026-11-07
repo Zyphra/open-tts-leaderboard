@@ -66,6 +66,7 @@ generate_stage() {
                 --max_eval_samples=${MAX_EVAL_SAMPLES} \
                 --server_url=http://127.0.0.1:${ZONOS3_PORT} \
                 --server_pid=\$SERVER_PID \
+                --server_log=/tmp/zonos3_server.log \
                 ${VOICE_CLONE_FLAG}
             mkdir -p /results
             cp -r results/${MODEL_SAFE} /results/
