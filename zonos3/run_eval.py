@@ -216,6 +216,7 @@ def ttfa_probe(args, language, server_language, text_normalization, caps):
               extra={"engine": "zonos3-sgl", "batch_size": 1, "voice": None if args.voice_clone else args.voice,
                      "speaker_mode": "embedding" if args.voice_clone else "default voice", "seed": args.seed,
                      "max_tokens": args.max_tokens, "stream_decode": "server default (prefix)",
+                     "text_normalization": text_normalization,
                      "decoder": caps["decoder"], "http_reads_per_utterance": reads})
 
 
@@ -225,7 +226,7 @@ def main(args):
     set_seed(args.seed)
     language = args.language or args.split
     server_language = SERVER_LANGUAGE.get(language, "en_us")
-    text_normalization = language in SERVER_LANGUAGE
+    text_normalization = language in SERVER_LANGUAGE and args.text_normalization
 
     wait_for_server(args.server_url, args.server_timeout, args.server_pid, args.server_log)
     caps = json.loads(http(f"{args.server_url}/v2/capabilities")[0])
@@ -311,6 +312,8 @@ if __name__ == "__main__":
     parser.add_argument("--max_tokens", type=int, default=1350, help="Frame cap per request (15 Hz: 1350 = 90 s).")
     parser.add_argument("--voice", default="AmericanFemale",
                         help="Server default voice (GET /v2/speakers) for a --ttfa_probe without --voice_clone.")
+    parser.add_argument("--text_normalization", action=argparse.BooleanOptionalAction, default=True,
+                        help="Server text normalization for the languages that have it (--no-text_normalization: off).")
     args = parser.parse_args()
 
     print("*" * 100)

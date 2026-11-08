@@ -91,6 +91,8 @@ generate_stage() {
 # does. TTFA_FLAVOR defaults to h200, not the leaderboard's a100-large: the release serving config runs the MoE experts
 # on the training kernels (env.sh ZONOS3_USE_TRAINING_SONIC_EXPERTS=1), whose gated GEMM has no sm_80 build (quack:
 # "Gemm Sm80 is not implemented yet"), as fishaudio-drama-3's FP8 experts. TTFA_SAMPLES: -1 = the whole split.
+# TTFA_ARGS: extra run_eval.py flags (e.g. --no-text_normalization); TTFA_TAG: inserted before the flavor in the sidecar
+# name, so a variant does not overwrite the reference probe.
 ttfa_job() {
     local flavor="${TTFA_FLAVOR:-h200}" model_id="${TTFA_MODEL_ID:-Zyphra/ZONOS3-Mini}"
     local model_safe="${model_id//\//-}"
@@ -110,11 +112,11 @@ ttfa_job() {
                 --split=en \
                 --language=en \
                 --ttfa_probe=${TTFA_SAMPLES:--1} \
-                --no-voice_clone \
+                --no-voice_clone ${TTFA_ARGS:-} \
                 --server_url=http://127.0.0.1:${ZONOS3_PORT} \
                 --server_pid=\$SERVER_PID \
                 --server_log=/tmp/zonos3_server.log
-            for f in results/${model_safe}/TTFA_MODEL_*.json; do mv \"\$f\" \"\${f%.json}__${flavor}.json\"; done
+            for f in results/${model_safe}/TTFA_MODEL_*.json; do mv \"\$f\" \"\${f%.json}${TTFA_TAG:+__${TTFA_TAG}}__${flavor}.json\"; done
             mkdir -p /results/${model_safe}
             cp results/${model_safe}/TTFA_MODEL_*.json /results/${model_safe}/
         "
