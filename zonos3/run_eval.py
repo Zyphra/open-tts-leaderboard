@@ -29,8 +29,10 @@ import sys
 import tempfile
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
+from http.client import HTTPConnection, RemoteDisconnected
 
 import numpy as np
 import soundfile as sf
@@ -160,18 +162,37 @@ def synthesize(base_url, payload, timeout, retries):
         time.sleep(2.0 * 2**attempt)
 
 
+_CONNECTIONS: dict[str, HTTPConnection] = {}  # one kept-alive connection per server (stream_synthesize)
+
+
 def stream_synthesize(base_url, payload, timeout):
     """POST /v2/generate as a stream, read to the end -> (float32 audio, sample rate, perf_counter at the first audio
-    bytes, reads)."""
+    bytes, reads). Requests reuse one kept-alive connection, as a streaming client holds one; a connection the server
+    closed while idle is reopened once."""
     data = json.dumps(dict(payload, stream=True)).encode("utf-8")
-    request = urllib.request.Request(f"{base_url}/v2/generate", data=data, headers={"Content-Type": "application/json"})
+    for attempt in range(2):
+        conn = _CONNECTIONS.get(base_url)
+        if conn is None:
+            url = urllib.parse.urlsplit(base_url)
+            conn = _CONNECTIONS[base_url] = HTTPConnection(url.hostname, url.port, timeout=timeout)
+        try:
+            conn.request("POST", "/v2/generate", body=data, headers={"Content-Type": "application/json"})
+            resp = conn.getresponse()
+        except (RemoteDisconnected, ConnectionError):
+            conn.close()
+            del _CONNECTIONS[base_url]
+            if attempt:
+                raise
+            continue
+        break
+    if resp.status != 200:
+        raise RuntimeError(f"/v2/generate HTTP {resp.status}: {resp.read()[:500]!r}")
+    sample_rate = int(resp.headers.get("X-Audio-Sample-Rate", 44100))
     first, parts = None, []
-    with urllib.request.urlopen(request, timeout=timeout) as resp:
-        sample_rate = int(resp.headers.get("X-Audio-Sample-Rate", 44100))
-        while chunk := resp.read1(1 << 16):
-            if first is None:
-                first = time.perf_counter()
-            parts.append(chunk)
+    while chunk := resp.read1(1 << 16):
+        if first is None:
+            first = time.perf_counter()
+        parts.append(chunk)
     body = b"".join(parts)
     return np.frombuffer(body[: len(body) // 4 * 4], dtype="<f4"), sample_rate, first, len(parts)
 
@@ -227,7 +248,9 @@ def ttfa_probe(args, language, server_language, text_normalization, caps):
                      "max_tokens": args.max_tokens, "stream_decode": "server default (prefix)",
                      "text_normalization": text_normalization, "laci": args.laci,
                      "stream_codebooks": args.stream_codebooks if args.stream_codebooks is not None else "server default",
-                     "decoder": caps["decoder"], "http_reads_per_utterance": reads})
+                     "decoder": caps["decoder"], "http_reads_per_utterance": reads, "http_keep_alive": True,
+                     # the TTFA job's CUDA MPS daemon (scheduler and vocoder processes share the GPU concurrently)
+                     "cuda_mps": os.environ.get("ZONOS3_MPS") == "1"})
 
 
 def ttfa_in_process(args, language):

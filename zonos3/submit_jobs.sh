@@ -10,7 +10,7 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/scripts/tts_jobs_common
 # ── Backend config ───────────────────────────────────────────────────────────
 ZONOS3_IMAGE="${ZONOS3_IMAGE:-nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04}"   # CUDA 12.8 toolkit: the runtime JIT-compiles kernels
 ZONOS3_REPO="https://github.com/Zyphra/ZONOS3.git"
-ZONOS3_REV="${ZONOS3_REV:-619a5370f32e7b2a536ca3f01f64a345c327c701}"   # leaderboard-v3 (main 48c934d + throughput fixes, device codec head, TTSLLM.generate_stream): release LM rate30_20k_r2grpo, KEEP-2 decoder
+ZONOS3_REV="${ZONOS3_REV:-c7b3c42d573d410ea5cbc70af2025b98def1c82c}"   # leaderboard-v3 (main 48c934d + throughput fixes, device codec head, TTSLLM.generate_stream, default-voice lookup): release LM rate30_20k_r2grpo, KEEP-2 decoder
 ZONOS3_SECRETS_FILE="${ZONOS3_SECRETS_FILE:-${HOME}/.config/zonos3-eval/secrets.env}"   # ZONOS3_GITHUB_TOKEN=<token>
 UV_VERSION="0.9.17"
 ZONOS3_PORT=1919   # serve.sh's port
@@ -99,11 +99,24 @@ generate_stage() {
 # TTFA_ARGS: extra run_eval.py flags (e.g. --no-text_normalization); TTFA_TAG: inserted before the flavor in the sidecar
 # name, so a variant does not overwrite the reference probe. TTFA_IN_PROCESS=1: no server -- run_eval.py --in_process
 # times TTSLLM.generate_stream in the job's own process (the leaderboard's in-process engines' measurement), tagged "inproc".
+# TTFA_MPS (default 1): a CUDA MPS daemon before the server, so its scheduler and tokenizer/vocoder processes run kernels
+# concurrently instead of time-slicing the GPU (H100, embedding mode, TN off: p50 15.7 -> 14.8 ms, p95 24.7 -> 18.7 ms;
+# same PCM); without the daemon binary the server runs as before. The sidecar records it (cuda_mps).
 ttfa_job() {
     local flavor="${TTFA_FLAVOR:-h200}" model_id="${TTFA_MODEL_ID:-Zyphra/ZONOS3-Mini}"
-    local model_safe="${model_id//\//-}" tag="${TTFA_TAG:-}"
+    local model_safe="${model_id//\//-}" tag="${TTFA_TAG:-}" mps=""
     local serve target="--server_url=http://127.0.0.1:${ZONOS3_PORT} --server_pid=\$SERVER_PID --server_log=/tmp/zonos3_server.log"
-    serve="$(zonos3_serve "")"
+    if [[ "${TTFA_MPS:-1}" == 1 ]]; then
+        mps="export CUDA_MPS_PIPE_DIRECTORY=/tmp/mps/pipe CUDA_MPS_LOG_DIRECTORY=/tmp/mps/log
+            mkdir -p /tmp/mps/pipe /tmp/mps/log
+            if command -v nvidia-cuda-mps-control > /dev/null && nvidia-cuda-mps-control -d; then
+                export ZONOS3_MPS=1; echo 'CUDA MPS daemon started'
+            else
+                unset CUDA_MPS_PIPE_DIRECTORY CUDA_MPS_LOG_DIRECTORY; echo 'CUDA MPS unavailable: the server time-slices the GPU'
+            fi"
+    fi
+    serve="${mps}
+            $(zonos3_serve "")"
     if [[ "${TTFA_IN_PROCESS:-0}" == 1 ]]; then
         serve=""; target="--in_process --runtime_dir=/opt/zonos3"; tag="${TTFA_TAG:-inproc}"
     fi
