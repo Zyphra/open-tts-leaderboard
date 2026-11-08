@@ -10,7 +10,7 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/scripts/tts_jobs_common
 # ── Backend config ───────────────────────────────────────────────────────────
 ZONOS3_IMAGE="${ZONOS3_IMAGE:-nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04}"   # CUDA 12.8 toolkit: the runtime JIT-compiles kernels
 ZONOS3_REPO="https://github.com/Zyphra/ZONOS3.git"
-ZONOS3_REV="${ZONOS3_REV:-2c074981fbf9a84a16fc21b127916ef95c767624}"   # leaderboard-v3 (main 48c934d + the throughput fixes): release LM rate30_20k_r2grpo, KEEP-2 decoder
+ZONOS3_REV="${ZONOS3_REV:-619a5370f32e7b2a536ca3f01f64a345c327c701}"   # leaderboard-v3 (main 48c934d + throughput fixes, device codec head, TTSLLM.generate_stream): release LM rate30_20k_r2grpo, KEEP-2 decoder
 ZONOS3_SECRETS_FILE="${ZONOS3_SECRETS_FILE:-${HOME}/.config/zonos3-eval/secrets.env}"   # ZONOS3_GITHUB_TOKEN=<token>
 UV_VERSION="0.9.17"
 ZONOS3_PORT=1919   # serve.sh's port
@@ -97,10 +97,16 @@ generate_stage() {
 # on the training kernels (env.sh ZONOS3_USE_TRAINING_SONIC_EXPERTS=1), whose gated GEMM has no sm_80 build (quack:
 # "Gemm Sm80 is not implemented yet"), as fishaudio-drama-3's FP8 experts. TTFA_SAMPLES: -1 = the whole split.
 # TTFA_ARGS: extra run_eval.py flags (e.g. --no-text_normalization); TTFA_TAG: inserted before the flavor in the sidecar
-# name, so a variant does not overwrite the reference probe.
+# name, so a variant does not overwrite the reference probe. TTFA_IN_PROCESS=1: no server -- run_eval.py --in_process
+# times TTSLLM.generate_stream in the job's own process (the leaderboard's in-process engines' measurement), tagged "inproc".
 ttfa_job() {
     local flavor="${TTFA_FLAVOR:-h200}" model_id="${TTFA_MODEL_ID:-Zyphra/ZONOS3-Mini}"
-    local model_safe="${model_id//\//-}"
+    local model_safe="${model_id//\//-}" tag="${TTFA_TAG:-}"
+    local serve target="--server_url=http://127.0.0.1:${ZONOS3_PORT} --server_pid=\$SERVER_PID --server_log=/tmp/zonos3_server.log"
+    serve="$(zonos3_serve "")"
+    if [[ "${TTFA_IN_PROCESS:-0}" == 1 ]]; then
+        serve=""; target="--in_process --runtime_dir=/opt/zonos3"; tag="${TTFA_TAG:-inproc}"
+    fi
     hf jobs run \
         --flavor "${flavor}" --timeout 4h --secrets HF_TOKEN --secrets-file "${ZONOS3_SECRETS_FILE}" ${NAMESPACE_ARG} \
         --volume "hf://buckets/${RESULTS_BUCKET}:/results" "${ZONOS3_IMAGE}" \
@@ -108,7 +114,7 @@ ttfa_job() {
             ${RUN_EVAL_INJECT}
             $(inject_cmd "${REPO_ROOT}/scripts/ttfa_probe.py" /app/scripts/ttfa_probe.py)
             ${ZONOS3_RUNTIME_SETUP}
-            $(zonos3_serve "")
+            ${serve}
             ${ZONOS3_CLIENT_SETUP}
             cd /app/zonos3 && /opt/client/bin/python run_eval.py \
                 --model_id=${model_id} \
@@ -118,10 +124,8 @@ ttfa_job() {
                 --language=en \
                 --ttfa_probe=${TTFA_SAMPLES:--1} \
                 --no-voice_clone ${LACI_CLIENT_FLAG} ${TTFA_ARGS:-} \
-                --server_url=http://127.0.0.1:${ZONOS3_PORT} \
-                --server_pid=\$SERVER_PID \
-                --server_log=/tmp/zonos3_server.log
-            for f in results/${model_safe}/TTFA_MODEL_*.json; do mv \"\$f\" \"\${f%.json}${TTFA_TAG:+__${TTFA_TAG}}__${flavor}.json\"; done
+                ${target}
+            for f in results/${model_safe}/TTFA_MODEL_*.json; do mv \"\$f\" \"\${f%.json}${tag:+__${tag}}__${flavor}.json\"; done
             mkdir -p /results/${model_safe}
             cp results/${model_safe}/TTFA_MODEL_*.json /results/${model_safe}/
         "
