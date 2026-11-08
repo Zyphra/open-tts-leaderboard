@@ -10,7 +10,7 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/scripts/tts_jobs_common
 # ── Backend config ───────────────────────────────────────────────────────────
 ZONOS3_IMAGE="${ZONOS3_IMAGE:-nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04}"   # CUDA 12.8 toolkit: the runtime JIT-compiles kernels
 ZONOS3_REPO="https://github.com/Zyphra/ZONOS3.git"
-ZONOS3_REV="${ZONOS3_REV:-1c551947ebc996395d737276f3b4a0ba031eac09}"   # leaderboard-throughput (main a884139 + server throughput fixes): release LM rate30_20k_r2grpo, KEEP-2 decoder
+ZONOS3_REV="${ZONOS3_REV:-9a5bf6668ced660342f1e7206af1ca9de49880f3}"   # leaderboard-v2 (main 198dcbc + the throughput fixes): release LM rate30_20k_r2grpo, KEEP-2 decoder
 ZONOS3_SECRETS_FILE="${ZONOS3_SECRETS_FILE:-${HOME}/.config/zonos3-eval/secrets.env}"   # ZONOS3_GITHUB_TOKEN=<token>
 UV_VERSION="0.9.17"
 ZONOS3_PORT=1919   # serve.sh's port
@@ -28,6 +28,29 @@ if [[ " ${STAGES:-generate} " == *" generate "* ]] && ! grep -q '^ZONOS3_GITHUB_
     exit 1
 fi
 
+# ── Job pieces shared by stage 1 and the TTFA probe ──────────────────────────
+# Install the pinned runtime (the token comes from the job's secrets: \$ defers it to the job), start its server with
+# the given flags (empty: serve.sh's own defaults), then the HTTP client's venv while the server warms up.
+ZONOS3_RUNTIME_SETUP="
+            set -euo pipefail
+            export DEBIAN_FRONTEND=noninteractive
+            apt-get update -qq && apt-get install -y -qq --no-install-recommends git curl ca-certificates ffmpeg build-essential > /dev/null
+            curl -LsSf https://astral.sh/uv/${UV_VERSION}/install.sh | env UV_INSTALL_DIR=/usr/local/bin UV_NO_MODIFY_PATH=1 sh
+            git config --global url.\"https://x-access-token:\${ZONOS3_GITHUB_TOKEN}@github.com/\".insteadOf https://github.com/
+            git clone -q ${ZONOS3_REPO} /opt/zonos3
+            git -C /opt/zonos3 checkout -q ${ZONOS3_REV}
+            git -C /opt/zonos3 submodule update --init -q third_party/fusealign-multilingual
+            cd /opt/zonos3 && uv sync --locked --package zonos3-sgl --group phonemize"
+zonos3_serve() {   # zonos3_serve <lm or empty> [serve.sh flags...]
+    echo "
+            cd /opt/zonos3 && SERVE_MODEL=$1 servers/sgl/scripts/serve.sh ${*:2} > /tmp/zonos3_server.log 2>&1 &
+            SERVER_PID=\$!
+            trap 'rc=\$?; kill \$SERVER_PID 2>/dev/null || true; if [ \$rc -ne 0 ]; then tail -n 200 /tmp/zonos3_server.log; fi; exit \$rc' EXIT"
+}
+ZONOS3_CLIENT_SETUP="
+            uv venv -q --python 3.12 /opt/client
+            uv pip install -q --python /opt/client/bin/python 'datasets<4.0' 'huggingface_hub<1.0' soundfile librosa numpy tqdm num2words"
+
 # ── Stage 1: install the pinned runtime, start its server, generate via the HTTP client. MODEL_CFG = "model_id max_running [lm]". ──
 # max_running = the scheduler's running-request cap (and CUDA-graph batch); the client keeps 2x that many requests in
 # flight per batch, so the scheduler's queue refills every slot as soon as a request finishes. lm = --model-path (empty:
@@ -41,21 +64,10 @@ generate_stage() {
         --volume "hf://buckets/${RESULTS_BUCKET}:/results" "${ZONOS3_IMAGE}" \
         bash -c "
             ${RUN_EVAL_INJECT}
-            set -euo pipefail
-            export DEBIAN_FRONTEND=noninteractive
-            apt-get update -qq && apt-get install -y -qq --no-install-recommends git curl ca-certificates ffmpeg build-essential > /dev/null
-            curl -LsSf https://astral.sh/uv/${UV_VERSION}/install.sh | env UV_INSTALL_DIR=/usr/local/bin UV_NO_MODIFY_PATH=1 sh
-            git config --global url.\"https://x-access-token:\${ZONOS3_GITHUB_TOKEN}@github.com/\".insteadOf https://github.com/
-            git clone -q ${ZONOS3_REPO} /opt/zonos3
-            git -C /opt/zonos3 checkout -q ${ZONOS3_REV}
-            git -C /opt/zonos3 submodule update --init -q third_party/fusealign-multilingual
-            cd /opt/zonos3 && uv sync --locked --package zonos3-sgl --group phonemize
-            SERVE_MODEL=${SERVE_MODEL} servers/sgl/scripts/serve.sh --max-running-requests ${MAX_RUNNING} --cuda-graph-max-bs ${MAX_RUNNING} \
-                --max-prefill-length ${ZONOS3_PREFILL_TOKENS} --num-tokenizer ${ZONOS3_TOKENIZERS} > /tmp/zonos3_server.log 2>&1 &
-            SERVER_PID=\$!
-            trap 'rc=\$?; kill \$SERVER_PID 2>/dev/null || true; if [ \$rc -ne 0 ]; then tail -n 200 /tmp/zonos3_server.log; fi; exit \$rc' EXIT
-            uv venv -q --python 3.12 /opt/client
-            uv pip install -q --python /opt/client/bin/python 'datasets<4.0' 'huggingface_hub<1.0' soundfile librosa numpy tqdm num2words
+            ${ZONOS3_RUNTIME_SETUP}
+            $(zonos3_serve "${SERVE_MODEL}" --max-running-requests "${MAX_RUNNING}" --cuda-graph-max-bs "${MAX_RUNNING}" \
+                --max-prefill-length "${ZONOS3_PREFILL_TOKENS}" --num-tokenizer "${ZONOS3_TOKENIZERS}")
+            ${ZONOS3_CLIENT_SETUP}
             cd /app/zonos3 && /opt/client/bin/python run_eval.py \
                 --model_id=${MODEL_ID} \
                 --dataset_path=${DATASET_PATH} \
@@ -72,6 +84,44 @@ generate_stage() {
             cp -r results/${MODEL_SAFE} /results/
         "
 }
+
+# ── TTFA probe (TTFA=1): the leaderboard's streaming protocol (README "Time-to-first audio"), as one HF Job ──────
+# Batch size 1 over the whole CV3-Eval zero_shot/en split with the server's default voice (no cloning), served with
+# serve.sh's own defaults (latency, not throughput); the sidecar is suffixed with the flavor, as submit_ttfa_jobs.sh
+# does. TTFA_FLAVOR: a100-large (the leaderboard's GPU) or h200; TTFA_SAMPLES: -1 = the whole split.
+ttfa_job() {
+    local flavor="${TTFA_FLAVOR:-a100-large}" model_id="${TTFA_MODEL_ID:-Zyphra/ZONOS3-Mini}"
+    local model_safe="${model_id//\//-}"
+    hf jobs run \
+        --flavor "${flavor}" --timeout 4h --secrets HF_TOKEN --secrets-file "${ZONOS3_SECRETS_FILE}" ${NAMESPACE_ARG} \
+        --volume "hf://buckets/${RESULTS_BUCKET}:/results" "${ZONOS3_IMAGE}" \
+        bash -c "
+            ${RUN_EVAL_INJECT}
+            $(inject_cmd "${REPO_ROOT}/scripts/ttfa_probe.py" /app/scripts/ttfa_probe.py)
+            ${ZONOS3_RUNTIME_SETUP}
+            $(zonos3_serve "")
+            ${ZONOS3_CLIENT_SETUP}
+            cd /app/zonos3 && /opt/client/bin/python run_eval.py \
+                --model_id=${model_id} \
+                --dataset_path=${CV3_EVAL_PATH} \
+                --dataset=zero_shot \
+                --split=en \
+                --language=en \
+                --ttfa_probe=${TTFA_SAMPLES:--1} \
+                --no-voice_clone \
+                --server_url=http://127.0.0.1:${ZONOS3_PORT} \
+                --server_pid=\$SERVER_PID \
+                --server_log=/tmp/zonos3_server.log
+            for f in results/${model_safe}/TTFA_MODEL_*.json; do mv \"\$f\" \"\${f%.json}__${flavor}.json\"; done
+            mkdir -p /results/${model_safe}
+            cp results/${model_safe}/TTFA_MODEL_*.json /results/${model_safe}/
+        "
+}
+if [[ "${TTFA:-0}" == 1 ]]; then
+    NAMESPACE_ARG=""; [ -n "${ORG_NAME:-}" ] && NAMESPACE_ARG="--namespace ${ORG_NAME}"
+    ttfa_job
+    exit $?
+fi
 
 # ── Datasets: "config split asr_language [dataset_path]" ──────────────────────
 # Seed-TTS + CV3 from DATASET_NAMESPACE's private copies; MiniMax: every language but uk (Qwen3-ASR has no

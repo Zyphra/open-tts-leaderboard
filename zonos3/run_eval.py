@@ -22,6 +22,7 @@ import base64
 import json
 import os
 import re
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -154,11 +155,73 @@ def synthesize(base_url, payload, timeout, retries):
         time.sleep(2.0 * 2**attempt)
 
 
+def stream_synthesize(base_url, payload, timeout):
+    """POST /v2/generate as a stream, read to the end -> (float32 audio, sample rate, perf_counter at the first audio
+    bytes, reads)."""
+    data = json.dumps(dict(payload, stream=True)).encode("utf-8")
+    request = urllib.request.Request(f"{base_url}/v2/generate", data=data, headers={"Content-Type": "application/json"})
+    first, parts = None, []
+    with urllib.request.urlopen(request, timeout=timeout) as resp:
+        sample_rate = int(resp.headers.get("X-Audio-Sample-Rate", 44100))
+        while chunk := resp.read1(1 << 16):
+            if first is None:
+                first = time.perf_counter()
+            parts.append(chunk)
+    body = b"".join(parts)
+    return np.frombuffer(body[: len(body) // 4 * 4], dtype="<f4"), sample_rate, first, len(parts)
+
+
+def ttfa_probe(args, language, server_language, text_normalization, caps):
+    """Time to first audio at batch size 1 (scripts/ttfa_probe.py): one streaming request at a time with the eval's
+    seed and frame cap, prefix-streamed (stream_decode null = the server's prefix default for this codec). Without
+    --voice_clone the voice is the server's default voice --voice. Every response is read to the end (no early stop):
+    the server keeps generating a request whose client disconnected, which would delay the next probe request."""
+    from ttfa_probe import run_probe, sample_indices  # injected by the TTFA job, like every backend's probe
+
+    voice_id = None
+    if not args.voice_clone:  # default voices are listed by a hashed id; --voice may name the label
+        speakers = json.loads(http(f"{args.server_url}/v2/speakers")[0])["speakers"]
+        voice_id = next((s["id"] for s in speakers if args.voice in (s["id"], s.get("label"))), None)
+        if voice_id is None:
+            raise SystemExit(f"--voice {args.voice!r} is not one of the server's speakers: {[s.get('label') for s in speakers]}")
+    mode_suffix = "_voice_clone" if args.voice_clone else ""
+    dataset = load_tts_dataset(args, extra_columns=("prompt_audio",) if args.voice_clone else ())
+    payload = {"language": server_language, "text_normalization": text_normalization, "seed": args.seed,
+               "max_tokens": args.max_tokens, "format": "pcm"}
+    jobs = []
+    with tempfile.TemporaryDirectory(prefix="ttfa_prompts_") as prompt_dir:
+        for i in sample_indices(args.ttfa_probe, len(dataset)):
+            row = dataset[i]
+            job = dict(payload, text=row[args.text_column])
+            if args.voice_clone:  # the prompt is written as the eval writes it; its upload is part of the request
+                path = os.path.join(prompt_dir, f"prompt_{row['id']}.wav")
+                sf.write(path, np.asarray(row["prompt_audio"]["array"], dtype=np.float32), row["prompt_audio"]["sampling_rate"])
+                with open(path, "rb") as f:
+                    job.update(speaker_mode="embedding", speaker_audio_base64=base64.b64encode(f.read()).decode("ascii"),
+                               speaker_audio_name=os.path.basename(path))
+            else:
+                job.update(speaker_embedding_id=voice_id)
+            jobs.append(job)
+    reads = []
+
+    def gen(job):
+        job = dict(job, text=spell_numbers(job["text"], language))
+        audio, sample_rate, first, n_reads = stream_synthesize(args.server_url, job, args.request_timeout)
+        reads.append(n_reads)
+        return audio, sample_rate, first
+
+    paths = output_paths(args, mode_suffix)
+    run_probe(gen, jobs, model_id=args.model_id, dataset_path=args.dataset_path, dataset_config=args.dataset,
+              split=args.split, out_dir=paths.model_dir, mode_suffix=mode_suffix, n=args.ttfa_probe,
+              extra={"engine": "zonos3-sgl", "batch_size": 1, "voice": None if args.voice_clone else args.voice,
+                     "speaker_mode": "embedding" if args.voice_clone else "default voice", "seed": args.seed,
+                     "max_tokens": args.max_tokens, "stream_decode": "server default (prefix)",
+                     "decoder": caps["decoder"], "http_reads_per_utterance": reads})
+
+
 def main(args):
-    if not args.voice_clone:
+    if not args.voice_clone and not args.ttfa_probe:
         raise SystemExit("The ZONOS3 backend evaluates speaker-embedding cloning only; run with --voice_clone.")
-    if args.ttfa_probe:
-        raise SystemExit("--ttfa_probe is not implemented for the ZONOS3 backend.")
     set_seed(args.seed)
     language = args.language or args.split
     server_language = SERVER_LANGUAGE.get(language, "en_us")
@@ -172,6 +235,9 @@ def main(args):
     print(f"ZONOS3 server: model={served} codec={caps['audio_codec']} decoder={json.dumps(caps['decoder'])} "
           f"speaker_embedding_codec={caps['speaker_embedding_codec']} max_tokens={caps['max_tokens']}")
     print(f"language={language} -> server language={server_language}, text_normalization={text_normalization}")
+    if args.ttfa_probe:
+        ttfa_probe(args, language, server_language, text_normalization, caps)
+        return
 
     paths = output_paths(args, "_voice_clone")
     os.makedirs(os.path.join(paths.output_dir, "prompts"), exist_ok=True)
@@ -243,6 +309,8 @@ if __name__ == "__main__":
     parser.add_argument("--request_timeout", type=int, default=900, help="Seconds per /v2/generate request.")
     parser.add_argument("--retries", type=int, default=4, help="Retries per request on 5xx / connection errors.")
     parser.add_argument("--max_tokens", type=int, default=1350, help="Frame cap per request (15 Hz: 1350 = 90 s).")
+    parser.add_argument("--voice", default="AmericanFemale",
+                        help="Server default voice (GET /v2/speakers) for a --ttfa_probe without --voice_clone.")
     args = parser.parse_args()
 
     print("*" * 100)
