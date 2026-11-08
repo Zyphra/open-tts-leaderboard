@@ -187,7 +187,7 @@ def ttfa_probe(args, language, server_language, text_normalization, caps):
     mode_suffix = "_voice_clone" if args.voice_clone else ""
     dataset = load_tts_dataset(args, extra_columns=("prompt_audio",) if args.voice_clone else ())
     payload = {"language": server_language, "text_normalization": text_normalization, "seed": args.seed,
-               "max_tokens": args.max_tokens, "format": "pcm"}
+               "max_tokens": args.max_tokens, "format": "pcm", "laci": args.laci}
     jobs = []
     with tempfile.TemporaryDirectory(prefix="ttfa_prompts_") as prompt_dir:
         for i in sample_indices(args.ttfa_probe, len(dataset)):
@@ -216,7 +216,7 @@ def ttfa_probe(args, language, server_language, text_normalization, caps):
               extra={"engine": "zonos3-sgl", "batch_size": 1, "voice": None if args.voice_clone else args.voice,
                      "speaker_mode": "embedding" if args.voice_clone else "default voice", "seed": args.seed,
                      "max_tokens": args.max_tokens, "stream_decode": "server default (prefix)",
-                     "text_normalization": text_normalization,
+                     "text_normalization": text_normalization, "laci": args.laci,
                      "decoder": caps["decoder"], "http_reads_per_utterance": reads})
 
 
@@ -261,7 +261,7 @@ def main(args):
                 "text": text, "language": server_language, "text_normalization": text_normalization,
                 "speaker_mode": "embedding", "speaker_audio_base64": speaker_audio,
                 "speaker_audio_name": os.path.basename(ppath),
-                "seed": args.seed, "max_tokens": args.max_tokens, "stream": False, "format": "pcm",
+                "seed": args.seed, "max_tokens": args.max_tokens, "stream": False, "format": "pcm", "laci": args.laci,
             })
             prompt_rel_paths.append(prel)
 
@@ -314,6 +314,8 @@ if __name__ == "__main__":
                         help="Server default voice (GET /v2/speakers) for a --ttfa_probe without --voice_clone.")
     parser.add_argument("--text_normalization", action=argparse.BooleanOptionalAction, default=True,
                         help="Server text normalization for the languages that have it (--no-text_normalization: off).")
+    parser.add_argument("--laci", action="store_true",
+                        help="LACI alignment-guarded decoding (the server needs LACI heads: serve.sh LACI_ALL=1).")
     args = parser.parse_args()
 
     print("*" * 100)

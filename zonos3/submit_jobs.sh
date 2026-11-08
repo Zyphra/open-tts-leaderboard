@@ -18,6 +18,11 @@ ZONOS3_PORT=1919   # serve.sh's port
 # server and the client; prefill tokens per scheduler step, so a burst of requests is admitted in a few steps.
 ZONOS3_TOKENIZERS="${ZONOS3_TOKENIZERS:-16}"
 ZONOS3_PREFILL_TOKENS="${ZONOS3_PREFILL_TOKENS:-8192}"
+# ZONOS3_LACI=1: LACI alignment-guarded decoding (serve.sh LACI_ALL=1 loads the heads of every server language; the
+# client sends laci=true). Use its own model id so the results do not overwrite the plain run's.
+ZONOS3_LACI="${ZONOS3_LACI:-0}"
+LACI_SERVE_ENV=""; LACI_CLIENT_FLAG=""
+if [[ "${ZONOS3_LACI}" == 1 ]]; then LACI_SERVE_ENV="LACI_ALL=1"; LACI_CLIENT_FLAG="--laci"; fi
 # gen FLAVOR (h200) is set centrally in tts_jobs_common.sh for RTFx comparability — don't override.
 RUN_EVAL_INJECT="$(inject_run_eval)"
 SUPPORTS_VOICE_CLONE=true
@@ -43,7 +48,7 @@ ZONOS3_RUNTIME_SETUP="
             cd /opt/zonos3 && uv sync --locked --package zonos3-sgl --group phonemize"
 zonos3_serve() {   # zonos3_serve <lm or empty> [serve.sh flags...]
     echo "
-            cd /opt/zonos3 && SERVE_MODEL=$1 servers/sgl/scripts/serve.sh ${*:2} > /tmp/zonos3_server.log 2>&1 &
+            cd /opt/zonos3 && ${LACI_SERVE_ENV} SERVE_MODEL=$1 servers/sgl/scripts/serve.sh ${*:2} > /tmp/zonos3_server.log 2>&1 &
             SERVER_PID=\$!
             trap 'rc=\$?; kill \$SERVER_PID 2>/dev/null || true; if [ \$rc -ne 0 ]; then tail -n 200 /tmp/zonos3_server.log; fi; exit \$rc' EXIT"
 }
@@ -79,7 +84,7 @@ generate_stage() {
                 --server_url=http://127.0.0.1:${ZONOS3_PORT} \
                 --server_pid=\$SERVER_PID \
                 --server_log=/tmp/zonos3_server.log \
-                ${VOICE_CLONE_FLAG}
+                ${VOICE_CLONE_FLAG} ${LACI_CLIENT_FLAG}
             mkdir -p /results
             cp -r results/${MODEL_SAFE} /results/
         "
@@ -112,7 +117,7 @@ ttfa_job() {
                 --split=en \
                 --language=en \
                 --ttfa_probe=${TTFA_SAMPLES:--1} \
-                --no-voice_clone ${TTFA_ARGS:-} \
+                --no-voice_clone ${LACI_CLIENT_FLAG} ${TTFA_ARGS:-} \
                 --server_url=http://127.0.0.1:${ZONOS3_PORT} \
                 --server_pid=\$SERVER_PID \
                 --server_log=/tmp/zonos3_server.log
