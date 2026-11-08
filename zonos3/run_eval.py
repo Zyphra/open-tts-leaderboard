@@ -188,6 +188,8 @@ def ttfa_probe(args, language, server_language, text_normalization, caps):
     dataset = load_tts_dataset(args, extra_columns=("prompt_audio",) if args.voice_clone else ())
     payload = {"language": server_language, "text_normalization": text_normalization, "seed": args.seed,
                "max_tokens": args.max_tokens, "format": "pcm", "laci": args.laci}
+    if args.stream_codebooks is not None:  # early partial-frame decode (null = the server default)
+        payload["stream_codebooks"] = args.stream_codebooks
     jobs = []
     with tempfile.TemporaryDirectory(prefix="ttfa_prompts_") as prompt_dir:
         for i in sample_indices(args.ttfa_probe, len(dataset)):
@@ -217,6 +219,7 @@ def ttfa_probe(args, language, server_language, text_normalization, caps):
                      "speaker_mode": "embedding" if args.voice_clone else "default voice", "seed": args.seed,
                      "max_tokens": args.max_tokens, "stream_decode": "server default (prefix)",
                      "text_normalization": text_normalization, "laci": args.laci,
+                     "stream_codebooks": args.stream_codebooks if args.stream_codebooks is not None else "server default",
                      "decoder": caps["decoder"], "http_reads_per_utterance": reads})
 
 
@@ -316,6 +319,9 @@ if __name__ == "__main__":
                         help="Server text normalization for the languages that have it (--no-text_normalization: off).")
     parser.add_argument("--laci", action="store_true",
                         help="LACI alignment-guarded decoding (the server needs LACI heads: serve.sh LACI_ALL=1).")
+    parser.add_argument("--stream_codebooks", type=int, default=None,
+                        help="TTFA probe: codebooks a frame needs before the first prefix chunk decodes it (1..n_codebooks; "
+                             "n_codebooks = complete frames; default: the server's).")
     args = parser.parse_args()
 
     print("*" * 100)
