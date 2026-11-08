@@ -88,9 +88,11 @@ generate_stage() {
 # ── TTFA probe (TTFA=1): the leaderboard's streaming protocol (README "Time-to-first audio"), as one HF Job ──────
 # Batch size 1 over the whole CV3-Eval zero_shot/en split with the server's default voice (no cloning), served with
 # serve.sh's own defaults (latency, not throughput); the sidecar is suffixed with the flavor, as submit_ttfa_jobs.sh
-# does. TTFA_FLAVOR: a100-large (the leaderboard's GPU) or h200; TTFA_SAMPLES: -1 = the whole split.
+# does. TTFA_FLAVOR defaults to h200, not the leaderboard's a100-large: the release serving config runs the MoE experts
+# on the training kernels (env.sh ZONOS3_USE_TRAINING_SONIC_EXPERTS=1), whose gated GEMM has no sm_80 build (quack:
+# "Gemm Sm80 is not implemented yet"), as fishaudio-drama-3's FP8 experts. TTFA_SAMPLES: -1 = the whole split.
 ttfa_job() {
-    local flavor="${TTFA_FLAVOR:-a100-large}" model_id="${TTFA_MODEL_ID:-Zyphra/ZONOS3-Mini}"
+    local flavor="${TTFA_FLAVOR:-h200}" model_id="${TTFA_MODEL_ID:-Zyphra/ZONOS3-Mini}"
     local model_safe="${model_id//\//-}"
     hf jobs run \
         --flavor "${flavor}" --timeout 4h --secrets HF_TOKEN --secrets-file "${ZONOS3_SECRETS_FILE}" ${NAMESPACE_ARG} \
