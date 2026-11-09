@@ -10,7 +10,7 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/scripts/tts_jobs_common
 # ── Backend config ───────────────────────────────────────────────────────────
 ZONOS3_IMAGE="${ZONOS3_IMAGE:-nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04}"   # CUDA 12.8 toolkit: the runtime JIT-compiles kernels
 ZONOS3_REPO="https://github.com/Zyphra/ZONOS3.git"
-ZONOS3_REV="${ZONOS3_REV:-c7b3c42d573d410ea5cbc70af2025b98def1c82c}"   # leaderboard-v3 (main 48c934d + throughput fixes, device codec head, TTSLLM.generate_stream, default-voice lookup): release LM rate30_20k_r2grpo, KEEP-2 decoder
+ZONOS3_REV="${ZONOS3_REV:-0c243a4318fb4467239b5a928ec8e9b230e35fb6}"   # leaderboard-v3 (main 48c934d + throughput fixes, device codec head, TTSLLM.generate_stream, default-voice lookup, A100 kernels): release LM rate30_20k_r2grpo, KEEP-2 decoder
 ZONOS3_SECRETS_FILE="${ZONOS3_SECRETS_FILE:-${HOME}/.config/zonos3-eval/secrets.env}"   # ZONOS3_GITHUB_TOKEN=<token>
 UV_VERSION="0.9.17"
 ZONOS3_PORT=1919   # serve.sh's port
@@ -93,9 +93,10 @@ generate_stage() {
 # ── TTFA probe (TTFA=1): the leaderboard's streaming protocol (README "Time-to-first audio"), as one HF Job ──────
 # Batch size 1 over the whole CV3-Eval zero_shot/en split with the server's default voice (no cloning), served with
 # serve.sh's own defaults (latency, not throughput); the sidecar is suffixed with the flavor, as submit_ttfa_jobs.sh
-# does. TTFA_FLAVOR defaults to h200, not the leaderboard's a100-large: the release serving config runs the MoE experts
-# on the training kernels (env.sh ZONOS3_USE_TRAINING_SONIC_EXPERTS=1), whose gated GEMM has no sm_80 build (quack:
-# "Gemm Sm80 is not implemented yet"), as fishaudio-drama-3's FP8 experts. TTFA_SAMPLES: -1 = the whole split.
+# does. TTFA_FLAVOR defaults to the leaderboard's a100-large (the flavor open_results_pr.py publishes): there the runtime's
+# env.sh runs the portable kernels (Triton FusedMoE experts, FLA Triton chunks; SonicMoE and FLA's TileLang kernels are
+# Hopper-only), which on an H100 were as fast and as good as the Hopper ones. TTFA_FLAVOR=h200 probes Hopper.
+# TTFA_SAMPLES: -1 = the whole split.
 # TTFA_ARGS: extra run_eval.py flags (e.g. --no-text_normalization); TTFA_TAG: inserted before the flavor in the sidecar
 # name, so a variant does not overwrite the reference probe. TTFA_IN_PROCESS=1: no server -- run_eval.py --in_process
 # times TTSLLM.generate_stream in the job's own process (the leaderboard's in-process engines' measurement), tagged "inproc".
@@ -103,7 +104,7 @@ generate_stage() {
 # concurrently instead of time-slicing the GPU (H100, embedding mode, TN off: p50 15.7 -> 14.8 ms, p95 24.7 -> 18.7 ms;
 # same PCM); without the daemon binary the server runs as before. The sidecar records it (cuda_mps).
 ttfa_job() {
-    local flavor="${TTFA_FLAVOR:-h200}" model_id="${TTFA_MODEL_ID:-Zyphra/ZONOS3-Mini}"
+    local flavor="${TTFA_FLAVOR:-a100-large}" model_id="${TTFA_MODEL_ID:-Zyphra/ZONOS3-Mini}"
     local model_safe="${model_id//\//-}" tag="${TTFA_TAG:-}" mps=""
     local serve target="--server_url=http://127.0.0.1:${ZONOS3_PORT} --server_pid=\$SERVER_PID --server_log=/tmp/zonos3_server.log"
     if [[ "${TTFA_MPS:-1}" == 1 ]]; then
