@@ -1,8 +1,8 @@
 """
 TTS synthesis for the Open TTS Leaderboard (ZONOS3 Mini backend, stage 1).
 
-ZONOS3 Mini (Zyphra): runtime https://github.com/Zyphra/ZONOS3 (revision pinned in submit_jobs.sh), weights
-Zyphra/ZONOS3_Mini_release_ckpts (release LM lm/rate30_20k_r2grpo, KEEP-2 decoder). The job starts the
+ZONOS3 Mini (Zyphra): runtime https://github.com/Zyphra/ZONOS3-Mini (revision pinned in submit_jobs.sh), weights
+https://huggingface.co/Zyphra/ZONOS3-Mini (release LM lm/zonos3_mini, KEEP-2 decoder). The job starts the
 runtime's own server (servers/sgl/scripts/serve.sh); this script sends `--batch_size` concurrent
 POST /v2/generate requests per batch, and per-sample time = batch wall time / batch size.
 
@@ -415,7 +415,7 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    add_common_args(parser, batch_size=16, voice_clone=True)
+    add_common_args(parser, batch_size=32, voice_clone=True)
     parser.set_defaults(seed=0)  # ZTTS2-Eval protocol: seed 0 on every request
     parser.add_argument("--model_id", default="Zyphra/ZONOS3-Mini", help="Leaderboard model id (names the results folder).")
     parser.add_argument("--language", default=None, help="Language code of the split (default: --split).")
@@ -438,7 +438,7 @@ if __name__ == "__main__":
     parser.add_argument("--in_process", action="store_true",
                         help="TTFA probe without the server: TTSLLM.generate_stream in a worker under the runtime's venv.")
     parser.add_argument("--runtime_dir", default="/opt/zonos3", help="--in_process: the ZONOS3 checkout (with .venv).")
-    parser.add_argument("--lm", default="hf://Zyphra/ZONOS3_Mini_release_ckpts/lm/rate30_20k_r2grpo",
+    parser.add_argument("--lm", default="hf://Zyphra/ZONOS3-Mini/lm/zonos3_mini",
                         help="--in_process: the LM checkpoint (serve.sh's SERVE_MODEL).")
     parser.add_argument("--ttfa_worker", default=None, help=argparse.SUPPRESS)  # internal: the --in_process worker's texts
     args = parser.parse_args()
