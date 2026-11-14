@@ -30,6 +30,8 @@ generate_stage() {
         "
 }
 
+# Fish Audio S2 Pro covers every ZTTS2-Eval Mini language (model card), so no supports_language gate.
+
 # ── Datasets: "config split asr_language [dataset_path]" (comment/uncomment to pick) ────────
 DATASET_CONFIGS=(
     "tts en en"
@@ -68,6 +70,8 @@ DATASET_CONFIGS=(
     "tts vi vi ${MINIMAX_EVAL_PATH}"
     "tts fa fa ${NEYSHEKAR_EVAL_PATH}"
 )
+# ZTTS2-Eval Mini: supports_language keeps the model's languages.
+DATASET_CONFIGS+=("${ZTTS2_MINI_DATASET_CONFIGS[@]}")
 
 # ── Models: "model_id" (CLI args override) ───────────────────────────────────
 MODEL_CONFIGS=("fishaudio/s2-pro")

@@ -49,6 +49,8 @@ generate_stage() {
         "
 }
 
+# Higgs TTS 3 covers every ZTTS2-Eval Mini language (model card), so no supports_language gate.
+
 # ── Datasets: "config split asr_language [dataset_path]" (comment/uncomment to pick) ────────
 # Higgs TTS 3 is multilingual and infers the language from the text (no --language flag, no
 # `supports_language` gate), so asr_language is only the stage-2 ASR hint.
@@ -88,6 +90,8 @@ DATASET_CONFIGS=(
     "tts vi vi ${MINIMAX_EVAL_PATH}"
     "tts fa fa ${NEYSHEKAR_EVAL_PATH}"
 )
+# ZTTS2-Eval Mini: supports_language keeps the model's languages.
+DATASET_CONFIGS+=("${ZTTS2_MINI_DATASET_CONFIGS[@]}")
 
 # ── Models: "model_id concurrency" (CLI args override) ───────────────────────
 MODEL_CONFIGS=(

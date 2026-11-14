@@ -33,6 +33,10 @@ generate_stage() {
         "
 }
 
+# ── Languages MOSS-TTS covers (model card: 20) ──
+MOSS_TTS_LANGUAGES="zh en de es fr ja it he ko ru fa ar pl pt cs da sv hu el tr"
+supports_language() { [[ " ${MOSS_TTS_LANGUAGES} " == *" $1 "* ]]; }
+
 # ── Datasets: "config split asr_language [dataset_path]" (comment/uncomment to pick) ────────
 DATASET_CONFIGS=(
     "tts en en"
@@ -63,6 +67,8 @@ DATASET_CONFIGS=(
     "tts ar ar ${MINIMAX_EVAL_PATH}"
     "tts fa fa ${NEYSHEKAR_EVAL_PATH}"
 )
+# ZTTS2-Eval Mini: supports_language keeps the model's languages.
+DATASET_CONFIGS+=("${ZTTS2_MINI_DATASET_CONFIGS[@]}")
 
 # ── Models: "model_id batch_size" (CLI args override) ────────────────────────
 MODEL_CONFIGS=(

@@ -106,6 +106,8 @@ DATASET_CONFIGS=(
     "tts vi vi ${MINIMAX_EVAL_PATH}"
     "tts fa fa ${NEYSHEKAR_EVAL_PATH}"
 )
+# ZTTS2-Eval Mini: supports_language keeps the model's languages.
+DATASET_CONFIGS+=("${ZTTS2_MINI_DATASET_CONFIGS[@]}")
 
 # ── Models: "model_id batch_size max_new_tokens" (max_new_tokens optional; CLI args override) ──
 MODEL_CONFIGS=(

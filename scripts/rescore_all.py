@@ -39,6 +39,7 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(REPO_ROOT, "scripts"))
 
 from huggingface_hub import CommitOperationAdd, HfApi  # noqa: E402
+from huggingface_hub.errors import EntryNotFoundError  # noqa: E402
 
 from open_results_pr import (  # noqa: E402
     RESULTS_BUCKET,
@@ -172,13 +173,24 @@ def main():
     args = parser.parse_args()
 
     local_dir = args.local_dir or os.path.join(REPO_ROOT, "results")
-    every_file = {key: fetch_csv(target.filename, args.hf_token) for key, target in TARGETS.items()}
-    published = {key: every_file[key] for key in args.targets}
+    every_file = {}
+    for key, target in TARGETS.items():
+        try:
+            every_file[key] = fetch_csv(target.filename, args.hf_token)
+        except EntryNotFoundError:
+            # A fixed-language benchmark's file only exists once something was published to it.
+            if target.languages is None:
+                raise
+            print(f"{target.filename}: not published yet; skipping.")
+    published = {key: every_file[key] for key in args.targets if key in every_file}
 
-    # Only rows published on every benchmark (Seed-TTS and CV3, plain or voice-clone file), so
-    # partial entries such as Seed-TTS-only models are left alone.
+    # Only rows published on every core benchmark (Seed-TTS, CV3 and MiniMax, plain or voice-clone
+    # file), so partial entries such as Seed-TTS-only models are left alone. Fixed-language benchmarks
+    # (Target.languages) are optional: their rows are rescored whatever else the model is on.
     names_per_benchmark = {}
     for key, csv_file in every_file.items():
+        if TARGETS[key].languages is not None:
+            continue
         benchmark = TARGETS[key].marker
         names_per_benchmark.setdefault(benchmark, set()).update(row[0].strip() for row in csv_file.rows)
     on_all_benchmarks = set.intersection(*names_per_benchmark.values())
@@ -191,7 +203,7 @@ def main():
             name = row[0].strip()
             if args.models and name not in args.models:
                 continue
-            if name not in on_all_benchmarks:
+            if TARGETS[key].languages is None and name not in on_all_benchmarks:
                 continue
             if args.languages and not has_published_wer(csv_file.header, row, args.languages):
                 continue

@@ -83,6 +83,8 @@ DATASET_CONFIGS=(
     "tts it it ${MINIMAX_EVAL_PATH}"
     "tts pt pt ${MINIMAX_EVAL_PATH}"
 )
+# ZTTS2-Eval Mini: supports_language keeps the model's languages.
+DATASET_CONFIGS+=("${ZTTS2_MINI_DATASET_CONFIGS[@]}")
 
 # ── Models: "model_id batch_size" (CLI args override) ────────────────────────
 # One Hub repo holds every language checkpoint; the language comes from the dataset combo and the

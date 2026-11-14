@@ -42,6 +42,9 @@ CV3_EVAL_PATH="${CV3_EVAL_PATH:-${DATASET_NAMESPACE}/cv3_eval}"
 MINIMAX_EVAL_PATH="${MINIMAX_EVAL_PATH:-hf-audio/minimax_eval}"
 # Neyshekar (Persian) is CC0, so everyone uses the one public copy (scripts/prepare_neyshekar_eval.py).
 NEYSHEKAR_EVAL_PATH="${NEYSHEKAR_EVAL_PATH:-hf-audio/neyshekar_eval}"
+# ZTTS2-Eval Mini (coreset panels of ZTTS2-Eval; Clean CC-BY-4.0, In-The-Wild CC-BY-NC-SA-4.0) is public,
+# so everyone uses Zyphra's copy (scripts/prepare_ztts2_eval_mini.py).
+ZTTS2_EVAL_MINI_PATH="${ZTTS2_EVAL_MINI_PATH:-Zyphra/ztts2_eval_mini}"
 ORG_NAME="${ORG_NAME:-}"
 # Stage-1 (generation) flavor. IMPORTANT: keep this the SAME (h200) for EVERY backend — RTFx is
 # measured on the generation stage, so a uniform GPU is required for RTFx to be comparable across
@@ -95,14 +98,78 @@ VOICE_CLONE="${VOICE_CLONE:-false}"
 SCORER_IMAGE="hf.co/spaces/${SPACE}"
 
 # Datasets: "config split asr_language [dataset_path]". Backends may override before run_pipeline.
-# asr_language is the language hint for Qwen3-ASR (stage 2) and, for backends that take one,
-# for the TTS model too — so it must be a real language code, not a split name.
+# asr_language is the language hint for Qwen3-ASR (stage 2) (ZTTS2-Eval Mini lines are routed by
+# transcribe.py's ztts2 profile instead) and, for backends that take one, for the TTS model too —
+# so it must be a real language code, not a split name.
 # The optional 4th field points a single line at a different dataset repo (default:
 # DEFAULT_DATASET_PATH), so one list can mix e.g. Seed-TTS and CV3-Eval combos. It only has to
 # expose the same columns the backends read: `text` + `prompt_text`/`prompt_audio` when cloning.
 DATASET_CONFIGS=("tts en en")
 
+# ZTTS2-Eval Mini (55 splits). Voice-cloning backends append it to their DATASET_CONFIGS; their supports_language
+# gate keeps the model's languages. Tagalog is `fil` in field 3 for both panels (the In-The-Wild split is `tl`).
+ZTTS2_MINI_DATASET_CONFIGS=(
+    "clean en en ${ZTTS2_EVAL_MINI_PATH}"
+    "clean zh zh ${ZTTS2_EVAL_MINI_PATH}"
+    "clean de de ${ZTTS2_EVAL_MINI_PATH}"
+    "clean es es ${ZTTS2_EVAL_MINI_PATH}"
+    "clean fr fr ${ZTTS2_EVAL_MINI_PATH}"
+    "clean it it ${ZTTS2_EVAL_MINI_PATH}"
+    "clean ja ja ${ZTTS2_EVAL_MINI_PATH}"
+    "clean ko ko ${ZTTS2_EVAL_MINI_PATH}"
+    "clean ru ru ${ZTTS2_EVAL_MINI_PATH}"
+    "clean pt pt ${ZTTS2_EVAL_MINI_PATH}"
+    "clean ar ar ${ZTTS2_EVAL_MINI_PATH}"
+    "clean hi hi ${ZTTS2_EVAL_MINI_PATH}"
+    "clean tr tr ${ZTTS2_EVAL_MINI_PATH}"
+    "clean pl pl ${ZTTS2_EVAL_MINI_PATH}"
+    "clean id id ${ZTTS2_EVAL_MINI_PATH}"
+    "clean th th ${ZTTS2_EVAL_MINI_PATH}"
+    "clean fil fil ${ZTTS2_EVAL_MINI_PATH}"
+    "clean nl nl ${ZTTS2_EVAL_MINI_PATH}"
+    "clean vi vi ${ZTTS2_EVAL_MINI_PATH}"
+    "clean cs cs ${ZTTS2_EVAL_MINI_PATH}"
+    "clean sv sv ${ZTTS2_EVAL_MINI_PATH}"
+    "clean da da ${ZTTS2_EVAL_MINI_PATH}"
+    "clean fi fi ${ZTTS2_EVAL_MINI_PATH}"
+    "clean el el ${ZTTS2_EVAL_MINI_PATH}"
+    "clean hu hu ${ZTTS2_EVAL_MINI_PATH}"
+    "clean ro ro ${ZTTS2_EVAL_MINI_PATH}"
+    "clean uk uk ${ZTTS2_EVAL_MINI_PATH}"
+    "clean nb nb ${ZTTS2_EVAL_MINI_PATH}"
+    "clean he he ${ZTTS2_EVAL_MINI_PATH}"
+    "clean bg bg ${ZTTS2_EVAL_MINI_PATH}"
+    "clean hr hr ${ZTTS2_EVAL_MINI_PATH}"
+    "clean sk sk ${ZTTS2_EVAL_MINI_PATH}"
+    "clean ca ca ${ZTTS2_EVAL_MINI_PATH}"
+    "clean ms ms ${ZTTS2_EVAL_MINI_PATH}"
+    "clean fa fa ${ZTTS2_EVAL_MINI_PATH}"
+    "in_the_wild en en ${ZTTS2_EVAL_MINI_PATH}"
+    "in_the_wild zh zh ${ZTTS2_EVAL_MINI_PATH}"
+    "in_the_wild de de ${ZTTS2_EVAL_MINI_PATH}"
+    "in_the_wild es es ${ZTTS2_EVAL_MINI_PATH}"
+    "in_the_wild fr fr ${ZTTS2_EVAL_MINI_PATH}"
+    "in_the_wild it it ${ZTTS2_EVAL_MINI_PATH}"
+    "in_the_wild ja ja ${ZTTS2_EVAL_MINI_PATH}"
+    "in_the_wild ko ko ${ZTTS2_EVAL_MINI_PATH}"
+    "in_the_wild ru ru ${ZTTS2_EVAL_MINI_PATH}"
+    "in_the_wild pt pt ${ZTTS2_EVAL_MINI_PATH}"
+    "in_the_wild ar ar ${ZTTS2_EVAL_MINI_PATH}"
+    "in_the_wild hi hi ${ZTTS2_EVAL_MINI_PATH}"
+    "in_the_wild id id ${ZTTS2_EVAL_MINI_PATH}"
+    "in_the_wild tr tr ${ZTTS2_EVAL_MINI_PATH}"
+    "in_the_wild tl fil ${ZTTS2_EVAL_MINI_PATH}"
+    "in_the_wild pl pl ${ZTTS2_EVAL_MINI_PATH}"
+    "in_the_wild th th ${ZTTS2_EVAL_MINI_PATH}"
+    "in_the_wild nl nl ${ZTTS2_EVAL_MINI_PATH}"
+    "in_the_wild uk uk ${ZTTS2_EVAL_MINI_PATH}"
+    "in_the_wild vi vi ${ZTTS2_EVAL_MINI_PATH}"
+)
+
 utmos_language() { [[ " ${UTMOS_LANGS} " == *" $1 "* ]]; }
+# ZTTS2-Eval Mini lines are transcribed the way ZTTS2-Eval scores them (transcribe.py --asr_profile ztts2:
+# Whisper-large-v3 / Qwen3-ASR routed per language); every other dataset keeps Qwen3-ASR.
+asr_profile() { if [[ "${DATASET_PATH##*/}" == "ztts2_eval_mini" ]]; then echo ztts2; else echo leaderboard; fi; }
 stage_enabled() { [[ " ${STAGES} " == *" $1 "* ]]; }
 
 # ── Injection helpers ────────────────────────────────────────────────────────
@@ -241,7 +308,7 @@ transcribe_stage() {
         --volume "hf://buckets/${RESULTS_BUCKET}:/results" "${SCORER_IMAGE}" \
         bash -c "
             ${TRANSCRIBE_INJECT}
-            python /app/transformers/transcribe.py --manifest_path=${BUCKET_MANIFEST} --asr_language=${ASR_LANG} --asr_batch_size=${ASR_BATCH_SIZE} --max_audio_seconds=${MAX_AUDIO_SECONDS} --device=cuda:0${ASR_OVERWRITE_FLAG}
+            python /app/transformers/transcribe.py --manifest_path=${BUCKET_MANIFEST} --asr_language=${ASR_LANG} --asr_batch_size=${ASR_BATCH_SIZE} --max_audio_seconds=${MAX_AUDIO_SECONDS} --device=cuda:0 --asr_profile=$(asr_profile)${ASR_OVERWRITE_FLAG}
         "
 }
 sim_stage() {

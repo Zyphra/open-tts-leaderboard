@@ -85,6 +85,8 @@ DATASET_CONFIGS=(
     "tts ar ar ${MINIMAX_EVAL_PATH}"
     "tts hi hi ${MINIMAX_EVAL_PATH}"
 )
+# ZTTS2-Eval Mini: supports_language keeps the model's languages.
+DATASET_CONFIGS+=("${ZTTS2_MINI_DATASET_CONFIGS[@]}")
 
 # ── Models: "model_id variant supported_langs" (CLI args override) ───────────
 # variant: `english` -> ChatterboxTTS (English-only checkpoint, no language argument)

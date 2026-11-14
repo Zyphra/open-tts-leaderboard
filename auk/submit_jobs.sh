@@ -73,6 +73,8 @@ DATASET_CONFIGS=(
     "tts en en ${MINIMAX_EVAL_PATH}"
     "tts zh zh ${MINIMAX_EVAL_PATH}"
 )
+# ZTTS2-Eval Mini: supports_language keeps the model's languages.
+DATASET_CONFIGS+=("${ZTTS2_MINI_DATASET_CONFIGS[@]}")
 
 # ── Models: "model_id [batch_size] [duration_scale]" (CLI args override) ─────
 MODEL_CONFIGS=(

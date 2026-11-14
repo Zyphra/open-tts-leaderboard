@@ -258,7 +258,9 @@ def score_results(directory: str, model_id: str = None, multilingual: bool = Non
         csv_only: If True, suppress the per-dataset and composite printouts.
         language: Language code used for normalization (e.g. 'en', 'de', 'fr'). Non-'en' uses
                   ml_normalizer. CJK is scored per character (CER); it is also auto-detected per
-                  manifest from the reference text.
+                  manifest from the reference text. ZTTS2-Eval Mini manifests are scored by
+                  normalizer/ztts2.py, which takes the language from the split name; `language`
+                  then only gates UTMOS/KOMOS.
         manifests: Optional list of manifest file names (basenames or paths) to restrict scoring
                   to. `language` applies to every manifest in a call and only CJK is auto-detected,
                   so multi-language folders must be scored one language per call.
@@ -357,30 +359,44 @@ def score_results(directory: str, model_id: str = None, multilingual: bool = Non
         return model_id, dataset_id
 
     # Compute WER results per dataset, and RTFx over all datasets
-    from normalizer import data_utils
+    from normalizer import data_utils, ztts2
     results = {}
     stale_sim_files = []  # (basename, sim_model) for manifests whose SIM was on the other scale
 
     for result_file in result_files:
         manifest = read_manifest(result_file)
         model_id_of_file, dataset_id = parse_filepath(result_file)
+        # ZTTS2-Eval Mini panels are scored as ZTTS2-Eval scores them (normalizer/ztts2.py): their own text
+        # prep and weighted, clipped per-utterance WER instead of the normalization below.
+        panel = ztts2.parse_panel(dataset_id)
+        if panel is not None:
+            try:
+                panel_result = ztts2.score_manifest(manifest, *panel, use_sim=result_file not in sim_unavailable)
+            except ValueError as exc:
+                print(f"WARNING: {os.path.basename(result_file)} not scored: {exc}")
+                continue
+            if panel_result["n_items"] < panel_result["n_panel"]:
+                print(f"NOTE: {os.path.basename(result_file)} covers {panel_result['n_items']}/"
+                      f"{panel_result['n_panel']} items of the ZTTS2-Eval Mini {panel[0]}/{panel[1]} panel; "
+                      f"its estimate is renormalized over them.")
 
-        raw_references = [datum["text"] for datum in manifest]
-        raw_predictions = [datum["pred_text"] for datum in manifest]
+        if panel is None:
+            raw_references = [datum["text"] for datum in manifest]
+            raw_predictions = [datum["pred_text"] for datum in manifest]
 
-        # CJK is scored per character (CER); detected from `language` or the reference text.
-        use_cer = is_cjk_language(language) or _is_mostly_cjk(raw_references)
-        per_char = not use_cer and language in CHAR_LANGUAGES
+            # CJK is scored per character (CER); detected from `language` or the reference text.
+            use_cer = is_cjk_language(language) or _is_mostly_cjk(raw_references)
+            per_char = not use_cer and language in CHAR_LANGUAGES
 
-        if use_cer:
-            # `language` also gates the Chinese-only folds.
-            normalize = lambda t: cjk_normalizer(t, language=language)
-        elif language == "en":
-            normalize = data_utils.normalizer
-        else:
-            normalize = lambda t: data_utils.ml_normalizer(t, lang=language)
-        references = [normalize(t) for t in raw_references]
-        predictions = [normalize(t) for t in raw_predictions]
+            if use_cer:
+                # `language` also gates the Chinese-only folds.
+                normalize = lambda t: cjk_normalizer(t, language=language)
+            elif language == "en":
+                normalize = data_utils.normalizer
+            else:
+                normalize = lambda t: data_utils.ml_normalizer(t, lang=language)
+            references = [normalize(t) for t in raw_references]
+            predictions = [normalize(t) for t in raw_predictions]
 
         time = [datum["time"] for datum in manifest]
         duration = [datum["duration"] for datum in manifest]
@@ -395,52 +411,59 @@ def score_results(directory: str, model_id: str = None, multilingual: bool = Non
         else:
             sims = [datum["sim"] for datum in manifest if isinstance(datum.get("sim"), (int, float))]
         sim = round(100 * sum(sims) / len(sims), 2) if sims else None
+        if panel is not None:
+            sim = panel_result["sim"]
         utmos = read_utmos(result_file, manifest) if language in UTMOS_LANGUAGES else None
         komos = read_komos(result_file, manifest) if language in KOMOS_LANGUAGES else KomosResult()
 
-        if use_cer:
-            # Per-character alignment (merge_compounds is moot). The headline CJK number is the
-            # lenient CER (homophone + numeral folds), always <= the unnormalized CER.
-            _lenient = lambda t: cjk_normalizer(t, fold_homophones=True, fold_numerals=True, language=language)
-            folded = batch_error_rate(
-                [tuple(_lenient(t)) for t in raw_references],
-                [tuple(_lenient(t)) for t in raw_predictions],
-                merge_compounds=False,
-            )
-            total_ins, total_del, total_sub = folded["ins"], folded["del"], folded["sub"]
-            wer = folded["err_rate"]
-
-            # Unnormalized CER, directly comparable with seed-tts-eval's run_wer.py.
-            r = batch_error_rate(
-                [tuple(ref) for ref in references],
-                [tuple(pred) for pred in predictions],
-                merge_compounds=False,
-            )
-            cer_unnormalized = round(100 * r["err_rate"], 2)
+        if panel is not None:
+            wer, metric, cer_unnormalized = panel_result["wer"], panel_result["metric"], None
+            total_ins, total_del, total_sub = panel_result["ins"], panel_result["del"], panel_result["sub"]
         else:
-            cer_unnormalized = None
-            # Hyphens are inaudible: fold them to whitespace on both sides. ml_normalizer keeps
-            # them, and num2words hyphenates e.g. French numerals ("dix-sept").
-            references = [r.replace("-", " ") for r in references]
-            predictions = [p.replace("-", " ") for p in predictions]
-            if multilingual:
-                # Pre-fold compound boundaries (e.g. German compounds); complements merge_compounds
-                # below, which also catches split compounds adjacent to other errors.
-                references, predictions = normalize_compound_pairs(references, predictions)
-            # Use kaldialign batch_error_rate with merge_compounds=True so that
-            # split compounds (e.g. "white paper" vs "whitepaper") count as
-            # 0 errors in either direction.
-            if per_char:
-                refs_split  = [tuple(r.replace(" ", "")) for r in references]
-                preds_split = [tuple(p.replace(" ", "")) for p in predictions]
-            else:
-                refs_split  = [tuple(r.split()) for r in references]
-                preds_split = [tuple(p.split()) for p in predictions]
-            r = batch_error_rate(refs_split, preds_split, merge_compounds=not per_char)
-            total_ins, total_del, total_sub = r["ins"], r["del"], r["sub"]
-            wer = r["err_rate"]
+            if use_cer:
+                # Per-character alignment (merge_compounds is moot). The headline CJK number is the
+                # lenient CER (homophone + numeral folds), always <= the unnormalized CER.
+                _lenient = lambda t: cjk_normalizer(t, fold_homophones=True, fold_numerals=True, language=language)
+                folded = batch_error_rate(
+                    [tuple(_lenient(t)) for t in raw_references],
+                    [tuple(_lenient(t)) for t in raw_predictions],
+                    merge_compounds=False,
+                )
+                total_ins, total_del, total_sub = folded["ins"], folded["del"], folded["sub"]
+                wer = folded["err_rate"]
 
-        wer = round(100 * wer, 2)
+                # Unnormalized CER, directly comparable with seed-tts-eval's run_wer.py.
+                r = batch_error_rate(
+                    [tuple(ref) for ref in references],
+                    [tuple(pred) for pred in predictions],
+                    merge_compounds=False,
+                )
+                cer_unnormalized = round(100 * r["err_rate"], 2)
+            else:
+                cer_unnormalized = None
+                # Hyphens are inaudible: fold them to whitespace on both sides. ml_normalizer keeps
+                # them, and num2words hyphenates e.g. French numerals ("dix-sept").
+                references = [r.replace("-", " ") for r in references]
+                predictions = [p.replace("-", " ") for p in predictions]
+                if multilingual:
+                    # Pre-fold compound boundaries (e.g. German compounds); complements merge_compounds
+                    # below, which also catches split compounds adjacent to other errors.
+                    references, predictions = normalize_compound_pairs(references, predictions)
+                # Use kaldialign batch_error_rate with merge_compounds=True so that
+                # split compounds (e.g. "white paper" vs "whitepaper") count as
+                # 0 errors in either direction.
+                if per_char:
+                    refs_split  = [tuple(r.replace(" ", "")) for r in references]
+                    preds_split = [tuple(p.replace(" ", "")) for p in predictions]
+                else:
+                    refs_split  = [tuple(r.split()) for r in references]
+                    preds_split = [tuple(p.split()) for p in predictions]
+                r = batch_error_rate(refs_split, preds_split, merge_compounds=not per_char)
+                total_ins, total_del, total_sub = r["ins"], r["del"], r["sub"]
+                wer = r["err_rate"]
+
+            wer = round(100 * wer, 2)
+            metric = "CER" if use_cer or per_char else "WER"
 
         if compute_rtfx:
             audio_length = sum(duration)
@@ -453,7 +476,7 @@ def score_results(directory: str, model_id: str = None, multilingual: bool = Non
         extra = {"ins": total_ins, "del": total_del, "sub": total_sub}
         # `wer` holds the headline error rate; `metric` says whether it is a WER or a CER. For CJK
         # it is the lenient CER, with `cer_unnormalized` the seed-tts-eval-comparable number.
-        results[result_key] = {"wer": wer, "metric": "CER" if use_cer or per_char else "WER", "cer_unnormalized": cer_unnormalized, "audio_length": audio_length, "inference_time": inference_time, "rtfx": rtfx, "sim": sim, "utmos": utmos, "komos": komos.score, "komos_count": komos.count, "komos_model": komos.model, **extra}
+        results[result_key] = {"wer": wer, "metric": metric, "cer_unnormalized": cer_unnormalized, "audio_length": audio_length, "inference_time": inference_time, "rtfx": rtfx, "sim": sim, "utmos": utmos, "komos": komos.score, "komos_count": komos.count, "komos_model": komos.model, **extra}
 
     # Name the manifests whose SIM was dropped, even under csv_only, so a blank SIM is explained.
     if stale_sim_files:

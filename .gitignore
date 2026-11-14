@@ -1,5 +1,7 @@
 *.jsonl
 *.json
+# ZTTS2-Eval Mini panel weights, read at scoring time (scripts/prepare_ztts2_eval_mini.py writes it)
+!normalizer/ztts2_eval_mini_weights.json
 *.wav
 
 # Byte-compiled / optimized / DLL files

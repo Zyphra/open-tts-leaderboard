@@ -88,6 +88,8 @@ DATASET_CONFIGS=(
     "tts pt pt ${MINIMAX_EVAL_PATH}"
     "tts ru ru ${MINIMAX_EVAL_PATH}"
 )
+# ZTTS2-Eval Mini: supports_language keeps the model's languages.
+DATASET_CONFIGS+=("${ZTTS2_MINI_DATASET_CONFIGS[@]}")
 
 
 # ── Models: "model_id batch_size speaker" (CLI args override) ─────────────────

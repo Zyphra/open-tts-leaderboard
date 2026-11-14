@@ -53,6 +53,8 @@ DATASET_CONFIGS=(
     "zero_shot de de ${CV3_EVAL_PATH}"
     "zero_shot es es ${CV3_EVAL_PATH}"
 )
+# ZTTS2-Eval Mini: supports_language keeps the model's languages.
+DATASET_CONFIGS+=("${ZTTS2_MINI_DATASET_CONFIGS[@]}")
 MODEL_CONFIGS=(
     "gradium/phonon-31m-en"
     "gradium/phonon-40m-en"

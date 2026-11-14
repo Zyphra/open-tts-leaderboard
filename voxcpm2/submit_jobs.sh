@@ -33,9 +33,13 @@ generate_stage() {
         "
 }
 
+# ── Languages VoxCPM2 covers (model card: 30; the model infers it from the text) ──
+VOXCPM2_LANGUAGES="ar my zh da nl en fi fr de el he hi id it ja km ko lo ms nb pl pt ru es sw sv fil th tr vi"
+supports_language() { [[ " ${VOXCPM2_LANGUAGES} " == *" $1 "* ]]; }
+
 # ── Datasets: "config split asr_language [dataset_path]" (comment/uncomment to pick) ────────
-# VoxCPM2 infers the language from the text (no language tag) and covers every language below, so
-# there is no `supports_language` gate; asr_language is only the stage-2 ASR hint.
+# VoxCPM2 infers the language from the text and takes no language tag; the gate above keeps the card's 30
+# languages. asr_language is only the stage-2 ASR hint.
 DATASET_CONFIGS=(
     "tts en en"
     "tts zh zh"
@@ -70,6 +74,8 @@ DATASET_CONFIGS=(
     "tts th th ${MINIMAX_EVAL_PATH}"
     "tts vi vi ${MINIMAX_EVAL_PATH}"
 )
+# ZTTS2-Eval Mini: supports_language keeps the model's languages.
+DATASET_CONFIGS+=("${ZTTS2_MINI_DATASET_CONFIGS[@]}")
 
 
 # ── Models: "model_id batch_size" (CLI args override) ────────────────────────

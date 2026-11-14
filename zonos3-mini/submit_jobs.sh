@@ -19,11 +19,14 @@ ZONOS3_PREFILL_TOKENS="${ZONOS3_PREFILL_TOKENS:-8192}"
 # VOICE_CLONE=true: zero-shot voice cloning + SIM; false (default) = fixed default voice.
 SUPPORTS_VOICE_CLONE=true
 
+# Languages ZONOS3-Mini covers (model card: 43; `no` is nb, `tl` is fil here).
+ZONOS3_LANGUAGES="en fr es de it pt nl pl ru sv tr uk cs da fi el hu nb ro sk bg zh ja ko ar he vi id th fil ms ka hi bn ta te mr gu kn ml pa or ur"
 # The fixed voice is a native default voice of each language (VOICES in run_eval.py); the model has none in
 # Japanese or in the languages without text normalization, and a foreign clip derails the speech, so those run in
 # voice-clone mode only.
 supports_language() {
-    [[ "${CLONE}" == "true" || " en zh fr de es it ko pt " == *" $1 "* ]]
+    [[ " ${ZONOS3_LANGUAGES} " == *" $1 "* ]] &&
+        [[ "${CLONE}" == "true" || " en zh fr de es it ko pt " == *" $1 "* ]]
 }
 
 # ── Stage 1: TTS generation. MODEL_CFG = "model_id batch_size". ──
@@ -106,6 +109,8 @@ DATASET_CONFIGS=(
     "tts th th ${MINIMAX_EVAL_PATH}"
     "tts vi vi ${MINIMAX_EVAL_PATH}"
 )
+# ZTTS2-Eval Mini: supports_language keeps the model's languages.
+DATASET_CONFIGS+=("${ZTTS2_MINI_DATASET_CONFIGS[@]}")
 
 # ── Models: "model_id batch_size" (CLI args override) ────────────────────────
 MODEL_CONFIGS=(

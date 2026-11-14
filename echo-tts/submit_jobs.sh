@@ -37,6 +37,8 @@ DATASET_CONFIGS=(
     "zero_shot en en ${CV3_EVAL_PATH:-hf-audio/cv3_eval}"
     "tts en en ${MINIMAX_EVAL_PATH}"
 )
+# ZTTS2-Eval Mini: supports_language keeps the model's languages.
+DATASET_CONFIGS+=("${ZTTS2_MINI_DATASET_CONFIGS[@]}")
 
 # ── Models: "model_id" (CLI args override) ───────────────────────────────────
 MODEL_CONFIGS=(

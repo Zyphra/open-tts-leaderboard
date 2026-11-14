@@ -41,6 +41,10 @@ generate_stage() {
         "
 }
 
+# ── Languages Audio8 Realistic covers (model card; no cs, el, ro, uk) ──
+AUDIO8_LANGUAGES="zh en ja ko de fr es it ru ar fi hi id ms nl nb pl pt sv th tr vi yue"
+supports_language() { [[ " ${AUDIO8_LANGUAGES} " == *" $1 "* ]]; }
+
 # ── Datasets: "config split asr_language [dataset_path]" (comment/uncomment) ──
 # Without a 4th field the line uses DEFAULT_DATASET_PATH (hf-audio/seed_tts_eval).
 DATASET_CONFIGS=(
@@ -78,6 +82,8 @@ DATASET_CONFIGS=(
     "tts th th ${MINIMAX_EVAL_PATH}"
     "tts vi vi ${MINIMAX_EVAL_PATH}"
 )
+# ZTTS2-Eval Mini: supports_language keeps the model's languages.
+DATASET_CONFIGS+=("${ZTTS2_MINI_DATASET_CONFIGS[@]}")
 
 # ── Models: "model_id batch_size" (CLI args override) ────────────────────────
 MODEL_CONFIGS=(

@@ -37,6 +37,9 @@ generate_stage() {
         "
 }
 
+# ── neuphonic/neutts-nano checkpoints are English-only (model metadata) ──
+supports_language() { [[ "$1" == en ]]; }
+
 # ── Datasets: "config split asr_language [dataset_path]" (comment/uncomment to pick) ──
 DATASET_CONFIGS=(
     "tts en en"
@@ -44,6 +47,8 @@ DATASET_CONFIGS=(
     # MiniMax multilingual (100 sentences/language): the languages the model supports. No `uk`: Qwen3-ASR has no Ukrainian.
     "tts en en ${MINIMAX_EVAL_PATH}"
 )
+# ZTTS2-Eval Mini: supports_language keeps the model's languages.
+DATASET_CONFIGS+=("${ZTTS2_MINI_DATASET_CONFIGS[@]}")
 
 # ── Models: "model_id batch_size" (batch_size optional; CLI args override) ────
 MODEL_CONFIGS=(
